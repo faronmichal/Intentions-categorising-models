@@ -1,5 +1,7 @@
 from openai import OpenAI
 import pandas as pd
+import matplotlib.pyplot as plt
+import os
 import json
 import time
 import torch
@@ -152,7 +154,7 @@ min_count = counts.min()
 df = df.groupby('intencja').apply(lambda x: x.sample(n=min_count)).reset_index(drop=True)
 
 # wczytanie danych lokalnie żeby nie musieć znowu generować
-# df = pd.read_csv('dane2.csv')
+#  df = pd.read_csv('dane2.csv')
 
 
 
@@ -768,3 +770,121 @@ plt.tight_layout()
 plt.show()
 
 
+
+
+
+
+
+# model fasttext
+
+# Podział na train i temp
+X_train_txt, X_temp_txt, y_train_txt, y_temp_txt = train_test_split(
+    df['tekst'], df['intencja'], 
+    test_size=0.3, 
+    stratify=df['intencja'], 
+    random_state=42
+)
+
+# Podział temp na val i test
+
+X_val_txt, X_test_txt, y_val_txt, y_test_txt = train_test_split(
+    X_temp_txt, y_temp_txt, 
+    test_size=2/3, 
+    stratify=y_temp_txt, 
+    random_state=42
+)
+
+print(f"Liczebności zbiorów (identyczne jak w LSTM):")
+print(f"Train: {len(X_train_txt)}")
+print(f"Val:   {len(X_val_txt)}")
+print(f"Test:  {len(X_test_txt)}")
+
+# Przygotowanie plików dla fasttext
+# FastText uczy się z plików .txt, a nie ze zmiennych pythonowych
+
+def save_to_fasttext_format(filename, texts, labels):
+    with open(filename, 'w', encoding='utf-8') as f:
+        for text, label in zip(texts, labels):
+            # Format: __label__kategoria treść
+            clean_label = label.replace(" ", "_")
+            clean_text = text.replace("\n", " ").strip()
+            f.write(f"__label__{clean_label} {clean_text}\n")
+
+train_file = "ft_train.txt"
+val_file = "ft_val.txt" # FastText może używać walidacji do autotune (opcjonalnie)
+test_file = "ft_test.txt" # Tego użyjemy do pętli ewaluacyjnej
+
+save_to_fasttext_format(train_file, X_train_txt, y_train_txt)
+save_to_fasttext_format(val_file, X_val_txt, y_val_txt)
+save_to_fasttext_format(test_file, X_test_txt, y_test_txt)
+
+# Trening modelu
+# FastText nie ma pętli "for epoch in range" w Pythonie on robi to w C++ wewnętrznie
+# Podajemy mu plik treningowy i liczbę epok
+
+model_ft = fasttext.train_supervised(
+    input=train_file, 
+    epoch=25, 
+    lr=1.0, 
+    wordNgrams=2, 
+    verbose=0
+)
+
+# Finalna ewaluacja
+correct = 0
+total = 0
+all_preds = []
+all_labels = []
+
+
+# Iterujemy po zbiorze testowym przygotowanym w poprzednim kroku (X_test_txt, y_test_txt)
+for text, true_label in zip(X_test_txt, y_test_txt):
+    # FastText wymaga tekstu bez nowych linii
+    clean_text = text.replace("\n", " ")
+    
+    # Predykcja
+    prediction = model_ft.predict(clean_text)
+    
+    # Wyciągnięcie etykiety i czyszczenie (np. __label__zwrot -> zwrot)
+    pred_label_raw = prediction[0][0] 
+    pred_label_clean = pred_label_raw.replace("__label__", "").replace("_", " ")
+    
+    # Zbieranie wyników
+    all_preds.append(pred_label_clean)
+    all_labels.append(true_label)
+    
+    if pred_label_clean == true_label:
+        correct += 1
+    total += 1
+
+# Wyliczenie metryk
+test_acc = 100 * correct / total
+test_f1 = f1_score(all_labels, all_preds, average='weighted')
+print(f"\n Native FastText Test Accuracy: {test_acc:.2f}% - F1 Score: {test_f1:.4f}")
+
+# TWykres
+y_true = np.array(all_labels)
+y_pred = np.array(all_preds)
+
+cm = confusion_matrix(y_true, y_pred, normalize='true', labels=categories) * 100
+disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=categories)
+
+fig, ax = plt.subplots(figsize=(10, 8))
+disp.plot(cmap='Blues', ax=ax, colorbar=True)
+plt.title(" Macierz pomyłek - FastText")
+plt.xticks(rotation=45, ha='right', fontsize=9)
+plt.yticks(fontsize=9)
+plt.xlabel("Predykcja")
+plt.ylabel("Prawdziwa etykieta")
+
+# Formatowanie procentów w komórkach
+for text in disp.text_.ravel():
+    text.set_text(f"{float(text.get_text()):.1f}")
+
+plt.tight_layout()
+plt.show()
+
+# Sprzątanie plików tymczasowych
+if os.path.exists("ft_train.txt"): os.remove("ft_train.txt")
+if os.path.exists("ft_val.txt"): os.remove("ft_val.txt")
+if os.path.exists("ft_test.txt"): os.remove("ft_test.txt")
