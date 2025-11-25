@@ -80,7 +80,7 @@ Understanding user intent from text is essential in customer support systems, ch
 ## Repository Contents
 
 * `lstm_networks.py` - LSTM and fasttext architectures and training utilities
-* `polish_llm_fine_tuning.ipynb` - Transformer fine-tuning workflow for Polish intentions
+* `polish_llm_fine_tuning.py` - Transformer fine-tuning workflow for Polish intentions
 
 ---
 
